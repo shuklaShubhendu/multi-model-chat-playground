@@ -34,16 +34,18 @@ class LegalRAG:
         self.retriever = None
         self.pdf_chain = None
         self.combined_chain = None
-        self.persist_directory = None # Changed to None for in-memory
-
+        
+        self.persist_directory = os.path.join(os.getcwd(), "chroma_db")
+        os.makedirs(self.persist_directory, exist_ok=True)  # Create temporary directory
         self.memory = ConversationBufferMemory(
             memory_key="chat_history",
             return_messages=True
         )
 
         try:
-            self.chroma_client = chromadb.Client( # Changed to in-memory client
-                settings=Settings(anonymized_telemetry=False) # Removed is_persistent as it's in-memory
+            self.chroma_client = chromadb.PersistentClient(
+                path=self.persist_directory,
+                settings=Settings(anonymized_telemetry=False, is_persistent=True)
             )
 
             if model_provider == "groq":
@@ -466,9 +468,9 @@ class LegalRAG:
 
             # Get summaries for each chunk
             summaries = []
-            collections = self.vector_store.get_collections() # This line will cause error as vector_store is Chroma object not client
-            for chunk in collections['documents']: # This line will cause error as vector_store is Chroma object not client
-                response = self.summary_chain.invoke({"question": chunk.page_content}) # This line will cause error as chunk is not defined here
+            collections = self.vector_store.get_collections()
+            for chunk in collections['documents']:
+                response = self.summary_chain.invoke({"question": chunk.page_content})
                 summaries.append(response)
             # Combine the chunk summaries
             full_summary = "\n\n".join(summaries)
@@ -508,16 +510,14 @@ class LegalRAG:
             logger.info(f"Split document into {len(chunks)} chunks")
 
             # Initialize vector store with proper embedding function
-            self.vector_store = Chroma.from_documents(
-                documents=chunks, # Changed from texts to chunks
+            self.vector_store = Chroma(
                 client=self.chroma_client,
                 collection_name="document_collection",
-                embedding=self.cvs_obj.embedding,
-                persist_directory=None # Added to use in-memory here as well, although client is in-memory now
+                embedding_function=self.cvs_obj.embedding
             )
 
             # Add documents and setup retriever
-            # self.vector_store.add_documents(chunks) # No need to call add_documents again, it is done in from_documents
+            self.vector_store.add_documents(chunks)
             self.retriever = self.vector_store.as_retriever(
                 search_type="similarity",
                 search_kwargs={"k": 3}
@@ -560,7 +560,7 @@ class LegalRAG:
         """Clean up temporary files and resources"""
         try:
             if self.persist_directory and os.path.exists(self.persist_directory):
-                shutil.rmtree(self.persist_directory) # This line will not execute as persist_directory is None now
+                shutil.rmtree(self.persist_directory)
             logger.info("Successfully cleaned up resources")
         except Exception as e:
             logger.error(f"Error during cleanup: {e}")
@@ -604,3 +604,4 @@ class LegalRAG:
             error_msg = f"Error processing predefined questions: {str(e)}"
             logger.error(error_msg)
             raise Exception(error_msg)
+
